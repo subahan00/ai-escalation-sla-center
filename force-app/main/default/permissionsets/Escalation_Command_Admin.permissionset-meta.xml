@@ -4,6 +4,10 @@
         <enabled>true</enabled>
         <name>SLA_Rule__mdt</name>
     </customMetadataTypeAccesses>
+    <externalCredentialPrincipalAccesses>
+        <enabled>true</enabled>
+        <externalCredentialPrincipal>Gemini_External_Credential-Gemini_API_Principal</externalCredentialPrincipal>
+    </externalCredentialPrincipalAccesses>
     <fieldPermissions><editable>true</editable><field>Escalation_Ticket__c.AI_Summary__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Escalation_Ticket__c.Category__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Escalation_Ticket__c.Complaint_Text__c</field><readable>true</readable></fieldPermissions>
