@@ -1,58 +1,40 @@
-# Salesforce DX Project
+# AI-Assisted Customer Escalation & SLA Command Center (Salesforce)
 
-Salesforce DX is a development approach that brings source-driven development, team collaboration, and continuous integration to the Salesforce Platform. Instead of working directly in an org through a web browser, you work with metadata as source files in a local DX project, track changes in version control, and deploy through automated processes.
+An event-driven Salesforce enterprise application that ingests external customer complaints via Apex REST, triages sentiment and category asynchronously using Google Gemini, calculates dynamic `BusinessHours`-aware SLAs via Custom Metadata, and streams live high-risk alerts to a Lightning Web Component dashboard without page refreshes.
 
-This project template gets you started with the tools and structure you need to build Salesforce applications using source control, scratch orgs, and the Salesforce CLI.
+## End-to-End Architecture
 
-## Prerequisites
+1. **Inbound Webhook (`EscalationWebhookController`)** — `@RestResource` endpoint (`/services/apexrest/api/escalations/*`) validates JSON payloads, enforces FLS/CRUD (`insert as user`), and creates `Escalation_Ticket__c` (`Pending Triage`).
+2. **Async AI Triage (`AITriageQueueable` + `GeminiTriageService`)** — Triggered in `after insert`; processes tickets in chunks of 5 with `Queueable` chaining, authenticates securely via **External Credentials + Named Credentials** (`x-goog-api-key` merge formula), requests structured JSON (`responseSchema`), and applies defensive Apex parsing.
+3. **Self-Healing Failure Logging (`AITriageFinalizer` + `Integration_Log__c`)** — Per-record `try/catch` isolates HTTP `429`/`503` errors without aborting the batch, while `System.Finalizer` catches unhandled `LimitException` crashes in a fresh transaction. Admins replay failed records in 1 click from the LWC.
+4. **Dynamic SLA Engine (`EscalationTriggerHandler` + `SLACalculatorService`)** — Runs in `before update` (zero extra DML), reads `SLA_Rule__mdt.getAll()` (0 SOQL), computes `Resolution_Deadline__c` using org `BusinessHours.add()`, and publishes `Escalation_Alert__e` via `EventBus.publish()` in `after update`.
+5. **Real-Time LWC Command Board (`escalationCommandBoard`)** — Subscribes to `/event/Escalation_Alert__e` via `lightning/empApi`, flashes high-risk cards red with zero refresh, runs live 1-second SLA countdown timers, and exposes a Failed Integrations retry tab.
 
-Before you start, make sure you have:
+## Architecture Decision Record (ADR)
 
-- **Salesforce CLI** - Download from [developer.salesforce.com/tools/salesforcecli](https://developer.salesforce.com/tools/salesforcecli). See [Install Salesforce CLI](https://developer.salesforce.com/docs/atlas.en-us.sfdx_setup.meta/sfdx_setup/sfdx_setup_install_cli.htm) for details.
-- **VS Code with Salesforce Extension Pack** - See [Installation Instructions](https://developer.salesforce.com/docs/platform/sfvscode-extensions/guide/install.html) for details. Includes the Agentforce Vibes extension.
-- **A development org** - Sign up for a free Developer Edition org [here](https://developer.salesforce.com/signup).
-- **Dev Hub enabled** (optional, required to create scratch orgs) - You can enable Dev Hub in your development org under Setup > Dev Hub.  See [Provide Developers Access to Salesforce DX Tools](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_setup_dx_tools.htm).
+| Decision | Chosen Approach | Rejected Alternative | Rationale |
+| :--- | :--- | :--- | :--- |
+| **Real-Time LWC Updates** | Platform Event (`Escalation_Alert__e`, `PublishAfterCommit`) + `lightning/empApi` | `setInterval` polling via Apex | Push-based CometD eliminates wasted API/SOQL calls; `PublishAfterCommit` prevents ghost UI alerts if a transaction rolls back |
+| **SLA Rule Storage** | Custom Metadata Type (`SLA_Rule__mdt`) read via `getAll()` | Hardcoded Apex constants or Custom Settings | Zero SOQL cost from application cache, deployable via SFDX/Git across sandboxes without Data Loader, admin-configurable without code deploys |
+| **External AI Security** | External Credential (Named Principal) + Named Credential + Permission Set | Remote Site Settings + hardcoded API key | Keeps secrets encrypted inside Salesforce and completely out of Apex code, debug logs, and version control |
+| **Async Orchestration** | `Queueable` (`Database.AllowsCallouts`) + `System.Finalizer` | `@future(callout=true)` | Supports chunked job chaining for bulk inserts, complex types, and uncatchable crash recovery via `System.Finalizer` |
+| **Error Log Relationship** | Optional Lookup (`Escalation_Ticket__c` on `Integration_Log__c`) | Master-Detail relationship | Keeps audit logs decoupled so logs survive ticket deletion and can record pre-insert failures |
 
-## Project Structure
+## Governor-Limit & Bulkification Proof
 
-Your DX project follows this structure:
+`EscalationEngineTest.testBulk200RecordsGovernorLimits` updates **200 `Escalation_Ticket__c` records** in a single DML transaction and programmatically asserts:
+- `Limits.getQueries()` stays well below 100 (at most 2 SOQL queries total, via `SLA_Rule__mdt.getAll()` + static `BusinessHours` ID caching).
+- `Limits.getDmlStatements()` stays minimal (`<= 5`).
+- All 200 high-risk records accurately transition to `Escalated` with `BusinessHours`-adjusted `Resolution_Deadline__c`.
 
-- **`force-app/main/default/`** - Your metadata source files live in this default package directory. You can configure additional package directories in the `sfdx-project.json` file.
-- **`config/`** - Scratch org definitions and project settings
-- **`scripts/`** - Automation scripts for common tasks
-- **`sfdx-project.json`** - Project manifest that defines package directories, namespace, API version, and other project-level settings
+## Deployment & Verification
 
-See [Salesforce DX Project Configuration](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_ws_config.htm).
+```bash
+# 1. Deploy metadata & Apex/LWC source
+sf project deploy start
 
-## Get Started
+# 2. Assign Permission Set (CRUD, FLS, Tabs, External Credential Principal Access)
+sf org assign permset --name Escalation_Command_Admin
 
-Ready to start developing? The [Get Started with Salesforce DX](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_get_started_dx.htm) guide walks you through your first project, from creating a scratch org to creating a simple Apex class or LWC to deploying your code to a sandbox.
-
-## Common Salesforce CLI Commands
-
-Here are common CLI commands that you'll use the most:
-
-- `sf org login web`: Authorize an org
-- `sf org open`: Open your org in a browser
-- `sf org create scratch`: Create a scratch org
-- `sf project deploy start`: Deploy metadata to your org
-- `sf project retrieve start`: Retrieve metadata from your org
-- `sf template generate <artifact>`: Scaffold new components, such as Apex classes and triggers, LWC components, Lightning apps, and more
-- `sf apex <command>`: Run Apex tests, run anonymous Apex blocks, and view logs
-- `sf data <command>`: Work with test data
-- `sf alias <command>`: Manage org aliases
-- `sf config <command>`: Configure CLI settings
-
-## Use Agentforce Vibes to Build Lightning Apps
-
-Transform your ideas into custom Lightning apps that extend CRM workflows directly in Lightning Experience. Through natural conversations with Agentforce Vibes, implement custom objects and fields, complex business logic, and dynamic UI components. See [Build a Lightning App Using Agentforce Vibes](https://developer.salesforce.com/docs/platform/einstein-for-devs/guide/lexapp-overview.html).
-
-## Additional Resources
-
-- [Agentforce Vibes Developer Guide](https://developer.salesforce.com/docs/platform/einstein-for-devs/guide/einstein-overview.html)
-- [Salesforce CLI Installation Guide](https://developer.salesforce.com/docs/atlas.en-us.sfdx_setup.meta/sfdx_setup/sfdx_setup_intro.htm)
-- [Salesforce DX Developer Guide](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/)
-- [Salesforce CLI Command Reference](https://developer.salesforce.com/docs/atlas.en-us.sfdx_cli_reference.meta/sfdx_cli_reference/)
-- [Salesforce CLI Plugin Development Guide](https://developer.salesforce.com/docs/platform/salesforce-cli-plugin/guide/conceptual-overview.html)
-- [Salesforce VS Code Extensions Documentation](https://developer.salesforce.com/tools/vscode/)
-
+# 3. Run unit & 200-record bulk tests with coverage
+sf apex run test --class-names EscalationWebhookControllerTest --class-names EscalationEngineTest --code-coverage --result-format human --wait 10
