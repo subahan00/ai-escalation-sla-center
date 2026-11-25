@@ -44,4 +44,6 @@
     </objectPermissions>
     <tabSettings><tab>Escalation_Ticket__c</tab><visibility>Visible</visibility></tabSettings>
     <tabSettings><tab>Integration_Log__c</tab><visibility>Visible</visibility></tabSettings>
+        <tabSettings><tab>Escalation_Command_Board</tab><visibility>Visible</visibility></tabSettings>
+
 </PermissionSet>

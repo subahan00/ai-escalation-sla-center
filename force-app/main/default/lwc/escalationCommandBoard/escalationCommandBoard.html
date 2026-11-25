@@ -1,0 +1,169 @@
+<template>
+    <div class="board-shell">
+        <!-- Header Bar -->
+        <div class="header-bar">
+            <div>
+                <h1 class="board-title">AI Escalation &amp; SLA Command Center</h1>
+                <p class="board-subtitle">Real-time Platform Event triage board with BusinessHours SLA tracking</p>
+            </div>
+            <div class="header-actions">
+                <span class={streamBadgeClass}>{streamStatusLabel}</span>
+                <lightning-button
+                    label="Refresh"
+                    icon-name="utility:refresh"
+                    onclick={handleRefreshClick}>
+                </lightning-button>
+            </div>
+        </div>
+
+        <!-- Live Pulsing Red Alert Banner (fires on Escalation_Alert__e) -->
+        <template lwc:if={latestAlert}>
+            <div class="alert-banner">
+                <div class="alert-content">
+                    <span class="alert-tag">LIVE HIGH-RISK ESCALATION</span>
+                    <strong>{latestAlert.ticketNumber}</strong> — {latestAlert.customerName}
+                    ({latestAlert.customerTier}) | Sentiment: <strong>{latestAlert.sentimentScore}/10</strong>
+                    | Category: {latestAlert.category}
+                    <div class="alert-summary">{latestAlert.summary}</div>
+                </div>
+                <lightning-button-icon
+                    icon-name="utility:close"
+                    variant="bare-inverse"
+                    alternative-text="Dismiss alert"
+                    onclick={handleDismissAlert}>
+                </lightning-button-icon>
+            </div>
+        </template>
+
+        <!-- KPI Strip -->
+        <div class="kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-label">Active Tickets</div>
+                <div class="kpi-value">{totalActiveCount}</div>
+            </div>
+            <div class="kpi-card kpi-danger">
+                <div class="kpi-label">High-Risk Escalated</div>
+                <div class="kpi-value">{escalatedCount}</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Pending AI Triage</div>
+                <div class="kpi-value">{pendingCount}</div>
+            </div>
+            <div class="kpi-card kpi-warn">
+                <div class="kpi-label">Failed Integrations</div>
+                <div class="kpi-value">{failedLogsCount}</div>
+            </div>
+        </div>
+
+        <!-- View Switcher Tabs -->
+        <div class="tab-bar">
+            <button class={boardTabClass} data-tab="board" onclick={handleTabSelect}>
+                Live Escalation Board
+            </button>
+            <button class={logsTabClass} data-tab="logs" onclick={handleTabSelect}>
+                Failed Integrations ({failedLogsCount})
+            </button>
+        </div>
+
+        <!-- TAB 1: Live Escalation Board -->
+        <template lwc:if={isBoardTab}>
+            <div class="filter-bar">
+                <lightning-combobox
+                    label="Status"
+                    value={selectedStatus}
+                    options={statusOptions}
+                    onchange={handleStatusChange}>
+                </lightning-combobox>
+                <lightning-combobox
+                    label="Category"
+                    value={selectedCategory}
+                    options={categoryOptions}
+                    onchange={handleCategoryChange}>
+                </lightning-combobox>
+            </div>
+
+            <template lwc:if={isLoading}>
+                <div class="spinner-wrap">
+                    <lightning-spinner alternative-text="Loading tickets" size="medium"></lightning-spinner>
+                </div>
+            </template>
+
+            <template lwc:elseif={hasFilteredTickets}>
+                <div class="cards-grid">
+                    <template for:each={filteredTickets} for:item="ticket">
+                        <div key={ticket.Id} class={ticket.cardClass}>
+                            <div class="card-top">
+                                <span class="ticket-num">{ticket.Name}</span>
+                                <span class="status-tag">{ticket.Status__c}</span>
+                            </div>
+
+                            <div class="customer-row">
+                                <strong>{ticket.Customer_Name__c}</strong>
+                                <span class="tier-badge">{ticket.Customer_Tier__c}</span>
+                            </div>
+
+                            <p class="card-summary">{ticket.summaryDisplay}</p>
+
+                            <div class="pill-row">
+                                <span class={ticket.sentimentClass}>{ticket.sentimentLabel}</span>
+                                <span class="pill pill-info">{ticket.categoryLabel}</span>
+                                <span class="pill pill-neutral">{ticket.External_Source__c}</span>
+                            </div>
+
+                            <div class="card-footer">
+                                <div class={ticket.countdownClass}>{ticket.slaCountdown}</div>
+                                <template lwc:if={ticket.canResolve}>
+                                    <lightning-button
+                                        label="Mark Resolved"
+                                        variant="neutral"
+                                        data-id={ticket.Id}
+                                        onclick={handleResolveTicket}>
+                                    </lightning-button>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+
+            <template lwc:else>
+                <div class="empty-state">No escalation tickets match the selected filters.</div>
+            </template>
+        </template>
+
+        <!-- TAB 2: Failed Integrations & 1-Click Retry -->
+        <template lwc:if={isLogsTab}>
+            <template lwc:if={hasFailedLogs}>
+                <div class="log-list">
+                    <template for:each={formattedLogs} for:item="log">
+                        <div key={log.Id} class="log-row">
+                            <div class="log-main">
+                                <div class="log-header">
+                                    <strong>{log.Name}</strong>
+                                    <span class="pill pill-danger">{log.statusCodeDisplay}</span>
+                                    <span class="pill pill-neutral">Ticket: {log.ticketNumber} ({log.customerName})</span>
+                                    <span class="pill pill-warning">Retries: {log.Retry_Count__c}</span>
+                                </div>
+                                <div class="log-error">{log.Error_Message__c}</div>
+                            </div>
+                            <div class="log-actions">
+                                <template lwc:if={log.canRetry}>
+                                    <lightning-button
+                                        label="Retry AI Triage"
+                                        variant="brand"
+                                        icon-name="utility:sync"
+                                        data-id={log.Id}
+                                        onclick={handleRetryLog}>
+                                    </lightning-button>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+            <template lwc:else>
+                <div class="empty-state">No failed integration logs. All AI callouts are healthy.</div>
+            </template>
+        </template>
+    </div>
+</template>
